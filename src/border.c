@@ -661,10 +661,6 @@ static void border_apply_geometry(struct border* border, CGRect window_frame) {
       if (!wid) continue;
       SLSTransactionMoveWindowWithGroup(transaction, wid,
                                         border_surface_origin(border, origin, i));
-      // Re-assert depth with the move so all four strips follow their owner
-      // when it crosses another app's windows.
-      SLSTransactionOrderWindow(transaction, wid, border_display_order(settings),
-                                border->target_wid);
     }
 
     SLSTransactionCommit(transaction, 0);

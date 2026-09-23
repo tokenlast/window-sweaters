@@ -225,6 +225,14 @@ static uint64_t geometry_time_ns(void) {
   return (uint64_t)ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec;
 }
 
+static uint64_t last_geometry_event_ns;
+
+bool windows_geometry_event_recent(void) {
+  uint64_t now = geometry_time_ns();
+  return last_geometry_event_ns && now >= last_geometry_event_ns
+         && now - last_geometry_event_ns < 120 * NSEC_PER_MSEC;
+}
+
 static void schedule_resize_followup(struct table* windows, uint32_t wid,
                                      uint64_t followup_id, int64_t delay_ns) {
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, delay_ns),
@@ -247,6 +255,7 @@ static void schedule_resize_followup(struct table* windows, uint32_t wid,
 void windows_window_resize(struct table* windows, uint32_t wid) {
   struct border* border = table_find(windows, &wid);
   if (!border) return;
+  last_geometry_event_ns = geometry_time_ns();
   if (g_knit_trace) {
     static uint64_t prev = 0;
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -316,6 +325,7 @@ static bool windows_window_focus(struct table* windows, uint32_t wid) {
 // not telling us promptly; if our own time is long, the fault is ours.
 void windows_window_move(struct table* windows, uint32_t wid) {
   struct border* border = table_find(windows, &wid);
+  if (border) last_geometry_event_ns = geometry_time_ns();
   if (g_knit_trace) {
     static uint64_t prev = 0;
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);

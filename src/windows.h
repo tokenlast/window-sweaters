@@ -14,6 +14,7 @@ void windows_window_resize(struct table* windows, uint32_t wid);
 void windows_window_hide(struct table* windows, uint32_t wid);
 void windows_window_unhide(struct table* windows, uint32_t wid);
 void windows_window_move(struct table* windows, uint32_t wid);
+bool windows_geometry_event_recent(void);
 bool windows_window_create(struct table* windows, uint32_t wid, uint64_t sid);
 bool windows_window_destroy(struct table* windows, uint32_t wid, uint64_t sid);
 

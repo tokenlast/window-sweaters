@@ -262,7 +262,9 @@ void windows_reconcile_start(void) {
   reconcile_timer = CFRunLoopTimerCreateWithHandler(NULL, CFAbsoluteTimeGetCurrent() + snapshot_interval,
                                                    snapshot_interval, 0, 0, ^(CFRunLoopTimerRef timer) {
     static bool pending = false; // Main-run-loop owned; at most one snapshot in flight.
-    if (g_knit_on && !pending) {
+    // Move/resize notifications already keep the overlay aligned. Defer the
+    // expensive whole-desktop recovery scan until the interaction settles.
+    if (g_knit_on && !pending && !windows_geometry_event_recent()) {
       pending = true;
       dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
         // Window-list collection is read-only and can take several milliseconds.
@@ -270,7 +272,8 @@ void windows_reconcile_start(void) {
         CFArrayRef snapshot = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly
                                                         | kCGWindowListExcludeDesktopElements, 0);
         dispatch_async(dispatch_get_main_queue(), ^{
-          if (g_knit_on) windows_reconcile_snapshot(&g_windows, snapshot);
+          if (g_knit_on && !windows_geometry_event_recent())
+            windows_reconcile_snapshot(&g_windows, snapshot);
           if (snapshot) CFRelease(snapshot);
           pending = false;
         });
