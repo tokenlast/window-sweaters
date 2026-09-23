@@ -36,6 +36,50 @@ void knit_auto_recolor(const char* app, pid_t pid, uint32_t yarn,
 
 extern struct settings g_settings;
 
+static uint32_t border_surface_id(const struct border* border, int index) {
+  return index ? border->extra_segments[index - 1].wid : border->wid;
+}
+
+static CGContextRef border_surface_context(const struct border* border, int index) {
+  return index ? border->extra_segments[index - 1].context : border->context;
+}
+
+static int border_surface_count(const struct border* border) {
+  return border->segmented_knit ? 4 : 1;
+}
+
+static bool border_surfaces_complete(const struct border* border) {
+  for (int i = 0; i < border_surface_count(border); i++) {
+    CGRect rect = border->segmented_knit ? border->segment_rects[i] : border->frame;
+    if (rect.size.width > 0 && rect.size.height > 0
+        && (!border_surface_id(border, i) || !border_surface_context(border, i)))
+      return false;
+  }
+  return true;
+}
+
+static CGPoint border_surface_origin(const struct border* border, CGPoint origin, int index) {
+  if (!border->segmented_knit) return origin;
+  CGRect rect = border->segment_rects[index];
+  return (CGPoint){origin.x + rect.origin.x,
+                   origin.y + border->frame.size.height - CGRectGetMaxY(rect)};
+}
+
+static void border_split_knit(struct border* border, CGRect frame, float band) {
+  // At a rounded corner the ring can reach farther inward than its straight
+  // edge. Include that diagonal reach and one antialiasing point in each strip.
+  float radius = fmaxf(0.f, fminf(border->radius,
+                       fminf(frame.size.width, frame.size.height) * .5f));
+  float inner_radius = fmaxf(0.f, radius - band - 1.f);
+  float reach = ceilf(band + 2.f + inner_radius * (1.f - (float)M_SQRT1_2));
+  float depth = fminf(reach, fminf(frame.size.width, frame.size.height) * .5f);
+  float middle = frame.size.height - 2.f * depth;
+  border->segment_rects[0] = CGRectMake(0, frame.size.height - depth, frame.size.width, depth);
+  border->segment_rects[1] = CGRectMake(0, 0, frame.size.width, depth);
+  border->segment_rects[2] = CGRectMake(0, depth, depth, middle);
+  border->segment_rects[3] = CGRectMake(frame.size.width - depth, depth, depth, middle);
+}
+
 // The knit now lives within the target's rectangle. It must be ordered above
 // that window to remain visible; the legacy outline styles retain their order.
 static int border_display_order(const struct settings* settings) {
@@ -51,10 +95,19 @@ struct settings* border_get_settings(struct border* border) {
 }
 
 static void border_destroy_window(struct border* border) {
+  for (int i = 0; i < 3; i++) {
+    if (border->extra_segments[i].context) CGContextRelease(border->extra_segments[i].context);
+    if (border->extra_segments[i].wid) SLSReleaseWindow(border->cid, border->extra_segments[i].wid);
+    border->extra_segments[i].wid = 0;
+    border->extra_segments[i].context = NULL;
+  }
   if (border->context) CGContextRelease(border->context);
   if (border->wid) SLSReleaseWindow(border->cid, border->wid);
   border->wid = 0;
   border->context = NULL;
+  border->segmented_knit = false;
+  border->segment_band = 0;
+  border->segment_radius = 0;
 }
 
 // Last-resort recovery for an onscreen target whose overlay stays absent.
@@ -132,60 +185,65 @@ static bool border_calculate_bounds(struct border* border, CGRect* frame, struct
 }
 
 static void border_draw(struct border* border, CGRect frame, struct settings* settings) {
-  CGContextSaveGState(border->context);
   border->needs_redraw = false;
 
   if (settings->border_style == BORDER_STYLE_KNIT) {
-    CGContextClearRect(border->context, frame);
-    if (!g_knit_on) {
-      CGContextFlush(border->context);
-      CGContextRestoreGState(border->context);
-      SLSFlushWindowContentRegion(border->cid, border->wid, NULL);
-      SLSWindowThaw(border->cid, border->wid);
-      return;
-    }
-    // A per-app rule wins over the colour this window would otherwise be
-    // handed, and may carry its own pattern.
-    uint32_t yarn = knit_color_for_app(border->app);
-    int chart = knit_pattern_for_app(border->app);
-    const struct app_rule* rule = knit_app_rule(border->app);
-    if (rule) yarn = rule->color;
-    if (knit_zigzag_active()) {
-      // One shared pattern, every app in its icon's colour, the 37
-      // hand-designed sweaters included; their own colours stay in By App.
-      knit_zigzag_yarn(border->app, border->owner_pid, &yarn, &chart);
-    } else if (!rule) {
-      // No hand-picked sweater: borrow the app's own colour from its icon
-      // rather than hashing its name into an arbitrary one.
-      uint32_t auto_yarn; int auto_chart;
-      if (knit_auto_yarn(border->app, border->owner_pid, &auto_yarn, &auto_chart)) {
-        yarn = auto_yarn;
-        if (auto_chart >= 0) chart = auto_chart;
+    uint32_t yarn = 0;
+    int chart = 0;
+    if (g_knit_on) {
+      // A per-app rule wins over the colour this window would otherwise be
+      // handed, and may carry its own pattern.
+      yarn = knit_color_for_app(border->app);
+      chart = knit_pattern_for_app(border->app);
+      const struct app_rule* rule = knit_app_rule(border->app);
+      if (rule) yarn = rule->color;
+      if (knit_zigzag_active()) {
+        // One shared pattern, every app in its icon's colour, the 37
+        // hand-designed sweaters included; their own colours stay in By App.
+        knit_zigzag_yarn(border->app, border->owner_pid, &yarn, &chart);
+      } else if (!rule) {
+        // No hand-picked sweater: borrow the app's own colour from its icon
+        // rather than hashing its name into an arbitrary one.
+        uint32_t auto_yarn; int auto_chart;
+        if (knit_auto_yarn(border->app, border->owner_pid, &auto_yarn, &auto_chart)) {
+          yarn = auto_yarn;
+          if (auto_chart >= 0) chart = auto_chart;
+        }
       }
-    }
 
-    unsigned overrides = knit_app_override(border->owner_pid, &yarn, &chart);
-    if (overrides & KNIT_OVERRIDE_COLOR)
-      knit_auto_recolor(border->app, border->owner_pid, yarn, &chart,
-                        overrides & KNIT_OVERRIDE_CHART);
+      unsigned overrides = knit_app_override(border->owner_pid, &yarn, &chart);
+      if (overrides & KNIT_OVERRIDE_COLOR)
+        knit_auto_recolor(border->app, border->owner_pid, yarn, &chart,
+                          overrides & KNIT_OVERRIDE_CHART);
+    }
     // Inset the input so the outer edge follows the actual window. Pass the
     // native outer radius: a 12 pt band around a 9 pt corner still needs a
     // 9 pt outer arc, not a 12 pt one with transparent corner gaps.
     CGRect inner = CGRectInset(border->drawing_bounds,
                                settings->border_width, settings->border_width);
-    knit_draw_inside(border->context,
-              inner,
-              border->radius,
-              settings->border_width,
-              yarn,
-              chart,
-              border->focused ? 0.f : g_knit_dim);
-    CGContextFlush(border->context);
-    CGContextRestoreGState(border->context);
-    SLSFlushWindowContentRegion(border->cid, border->wid, NULL);
-    SLSWindowThaw(border->cid, border->wid);
+    for (int i = 0; i < border_surface_count(border); i++) {
+      uint32_t wid = border_surface_id(border, i);
+      CGContextRef context = border_surface_context(border, i);
+      if (!wid || !context) continue;
+      CGRect segment = border->segmented_knit ? border->segment_rects[i] : frame;
+      CGRect local = CGRectMake(0, 0, segment.size.width, segment.size.height);
+      CGContextSaveGState(context);
+      CGContextClearRect(context, local);
+      if (g_knit_on) {
+        CGContextClipToRect(context, local);
+        CGContextTranslateCTM(context, -segment.origin.x, -segment.origin.y);
+        knit_draw_inside(context, inner, border->radius, settings->border_width,
+                         yarn, chart, border->focused ? 0.f : g_knit_dim);
+      }
+      CGContextFlush(context);
+      CGContextRestoreGState(context);
+      SLSFlushWindowContentRegion(border->cid, wid, NULL);
+      SLSWindowThaw(border->cid, wid);
+    }
     return;
   }
+
+  CGContextSaveGState(border->context);
 
   struct color_style color_style = border->focused
                                    ? settings->active_window
@@ -290,20 +348,41 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
 void border_create_window(struct border* border, CGRect frame, bool unmanaged, bool hidpi) {
   pthread_mutex_lock(&border->mutex);
   int cid = border->cid;
-  border->wid = window_create(cid, frame, hidpi, unmanaged);
-  if (border->wid) border->opacity = 1;
-
   border->frame = frame;
   border->needs_redraw = true;
-  border->context = border->wid ? SLWindowContextCreate(cid, border->wid, NULL) : NULL;
-  if (border->context) {
-    CGContextSetInterpolationQuality(border->context, kCGInterpolationNone);
-  } else {
-    border_destroy_window(border);
-  }
+  struct settings* settings = border_get_settings(border);
+  border->segmented_knit = settings->border_style == BORDER_STYLE_KNIT && !unmanaged;
+  border->segment_band = settings->border_width;
+  border->segment_radius = border->radius;
+  if (border->segmented_knit) border_split_knit(border, frame, settings->border_width);
+  else border->segment_rects[0] = frame;
 
+  bool complete = true;
+  for (int i = 0; i < border_surface_count(border); i++) {
+    CGRect segment = border->segment_rects[i];
+    if (segment.size.width <= 0 || segment.size.height <= 0) continue;
+    CGRect local = CGRectMake(0, 0, segment.size.width, segment.size.height);
+    uint32_t wid = window_create(cid, local, hidpi, unmanaged);
+    CGContextRef context = wid ? SLWindowContextCreate(cid, wid, NULL) : NULL;
+    if (!wid || !context) {
+      if (context) CGContextRelease(context);
+      if (wid) SLSReleaseWindow(cid, wid);
+      complete = false;
+      break;
+    }
+    CGContextSetInterpolationQuality(context, kCGInterpolationNone);
+    if (i == 0) { border->wid = wid; border->context = context; }
+    else { border->extra_segments[i - 1].wid = wid;
+           border->extra_segments[i - 1].context = context; }
+  }
   if (!border->sid) border->sid = window_space_id(cid, border->target_wid);
-  if (border->wid) window_send_to_space(cid, border->wid, border->sid);
+  if (complete && border->wid) {
+    border->opacity = 1;
+    for (int i = 0; i < border_surface_count(border); i++) {
+      uint32_t wid = border_surface_id(border, i);
+      if (wid) window_send_to_space(cid, wid, border->sid);
+    }
+  } else border_destroy_window(border);
   pthread_mutex_unlock(&border->mutex);
 }
 
@@ -315,9 +394,16 @@ void border_refresh_space(struct border* border) {
   pthread_mutex_lock(&border->mutex);
   uint64_t sid = window_space_id(border->cid, border->target_wid);
   if (sid) {
-    uint64_t overlay_sid = border->wid ? window_space_id(border->cid, border->wid) : sid;
-    if (sid != border->sid || overlay_sid != sid) {
-      if (border->wid) window_send_to_space(border->cid, border->wid, sid);
+    bool mismatch = sid != border->sid;
+    for (int i = 0; i < border_surface_count(border); i++) {
+      uint32_t wid = border_surface_id(border, i);
+      if (wid && window_space_id(border->cid, wid) != sid) mismatch = true;
+    }
+    if (mismatch) {
+      for (int i = 0; i < border_surface_count(border); i++) {
+        uint32_t wid = border_surface_id(border, i);
+        if (wid) window_send_to_space(border->cid, wid, sid);
+      }
       border->sid = sid;
       border->metadata_dirty = true;
       border->geometry_valid = false;
@@ -346,7 +432,10 @@ void border_update_internal(struct border* border, struct settings* settings, co
     uint64_t sid = window_space_id(cid, border->target_wid);
     if (sid && sid != border->sid) {
       border->sid = sid;
-      if (border->wid) window_send_to_space(cid, border->wid, sid);
+      for (int i = 0; i < border_surface_count(border); i++) {
+        uint32_t wid = border_surface_id(border, i);
+        if (wid) window_send_to_space(cid, wid, sid);
+      }
     }
     border->metadata_dirty = false;
   }
@@ -367,6 +456,18 @@ void border_update_internal(struct border* border, struct settings* settings, co
                          settings->hidpi  );
   }
   if (!border->wid || !border->context) return;
+  bool wants_segments = settings->border_style == BORDER_STYLE_KNIT && !border->is_proxy;
+  if (wants_segments != border->segmented_knit
+      || !border_surfaces_complete(border)
+      || (wants_segments && (!CGSizeEqualToSize(frame.size, border->frame.size)
+          || border->segment_band != settings->border_width
+          || border->segment_radius != border->radius))) {
+    // A live resize already hid the knit. Recreate its small strips once at
+    // the settled size, rather than retaining four oversized backing stores.
+    border_destroy_window(border);
+    border_create_window(border, frame, border->is_proxy, settings->hidpi);
+    if (!border->wid || !border->context) return;
+  }
   if (!CGRectEqualToRect(frame, border->frame)) border->needs_redraw = true;
 
   // Acquire this before disabling updates: every failure path below must
@@ -420,24 +521,23 @@ void border_update_internal(struct border* border, struct settings* settings, co
 
   if (border->needs_redraw) border_draw(border, frame, settings);
 
-  SLSTransactionMoveWindowWithGroup(transaction, border->wid, border->origin);
+  for (int i = 0; i < border_surface_count(border); i++) {
+    uint32_t wid = border_surface_id(border, i);
+    if (!wid) continue;
+    CGPoint origin = border_surface_origin(border, border->origin, i);
+    SLSTransactionMoveWindowWithGroup(transaction, wid, origin);
 
-  if (!border->is_proxy) {
-    CGAffineTransform transform = CGAffineTransformIdentity;
-    transform.tx = -border->origin.x;
-    transform.ty = -border->origin.y;
-    SLSTransactionSetWindowTransform(transaction,
-                                     border->wid,
-                                     0,
-                                     0,
-                                     transform   );
+    if (!border->is_proxy) {
+      CGAffineTransform transform = CGAffineTransformIdentity;
+      transform.tx = -origin.x;
+      transform.ty = -origin.y;
+      SLSTransactionSetWindowTransform(transaction, wid, 0, 0, transform);
+    }
+    SLSTransactionSetWindowLevel(transaction, wid, border->level);
+    SLSTransactionSetWindowSubLevel(transaction, wid, border->sub_level);
+    SLSTransactionOrderWindow(transaction, wid, border_display_order(settings),
+                              border->target_wid);
   }
-  SLSTransactionSetWindowLevel(transaction, border->wid, border->level);
-  SLSTransactionSetWindowSubLevel(transaction, border->wid, border->sub_level);
-  SLSTransactionOrderWindow(transaction,
-                            border->wid,
-                            border_display_order(settings),
-                            border->target_wid      );
   SLSTransactionCommit(transaction, 0);
   CFRelease(transaction);
 
@@ -451,8 +551,12 @@ void border_update_internal(struct border* border, struct settings* settings, co
     clear_tags |= WINDOW_TAG_STICKY;
   }
 
-  SLSSetWindowTags(cid, border->wid, &set_tags, 0x40);
-  SLSClearWindowTags(cid, border->wid, &clear_tags, 0x40);
+  for (int i = 0; i < border_surface_count(border); i++) {
+    uint32_t wid = border_surface_id(border, i);
+    if (!wid) continue;
+    SLSSetWindowTags(cid, wid, &set_tags, 0x40);
+    SLSClearWindowTags(cid, wid, &clear_tags, 0x40);
+  }
 
   if (disabled_update) SLSReenableUpdate(cid);
   border->geometry_valid = true;
@@ -531,7 +635,7 @@ static void border_apply_geometry(struct border* border, CGRect window_frame) {
   // AppKit may issue a move before the matching size event when resizing
   // from the top or left. Reconcile both dimensions from the same geometry
   // path instead of moving the old-size sweater to the new origin.
-  if (!border->geometry_valid || !border->wid || !border->context
+  if (!border->geometry_valid || !border_surfaces_complete(border)
       || border->needs_redraw || border->too_small || border->metadata_dirty
       || !isfinite(window_frame.origin.x) || !isfinite(window_frame.origin.y)
       || !CGSizeEqualToSize(window_frame.size, border->drawing_bounds.size)) {
@@ -552,18 +656,16 @@ static void border_apply_geometry(struct border* border, CGRect window_frame) {
 
   CFTypeRef transaction = SLSTransactionCreate(border->cid);
   if (transaction) {
-    SLSTransactionMoveWindowWithGroup(transaction, border->wid, origin);
-
-    // Re-assert where we sit in the stack. A move never goes through
-    // border_update_internal, so without this the border keeps whatever
-    // z-position it was last given — and dragging a window across another
-    // one leaves its knit stranded underneath that window. Ordering is
-    // relative to the target; including it in the move transaction keeps the
-    // border's position and depth together.
-    SLSTransactionOrderWindow(transaction,
-                              border->wid,
-                              border_display_order(settings),
-                              border->target_wid     );
+    for (int i = 0; i < border_surface_count(border); i++) {
+      uint32_t wid = border_surface_id(border, i);
+      if (!wid) continue;
+      SLSTransactionMoveWindowWithGroup(transaction, wid,
+                                        border_surface_origin(border, origin, i));
+      // Re-assert depth with the move so all four strips follow their owner
+      // when it crosses another app's windows.
+      SLSTransactionOrderWindow(transaction, wid, border_display_order(settings),
+                                border->target_wid);
+    }
 
     SLSTransactionCommit(transaction, 0);
     CFRelease(transaction);
@@ -585,9 +687,15 @@ static bool border_observe_window(struct border* border, CGRect* bounds, double*
 static void border_apply_opacity(struct border* border, double opacity) {
   if (!isfinite(opacity)) return;
   opacity = fmax(0, fmin(1, opacity));
-  if (border->wid && fabs(border->opacity - opacity) > .001
-      && SLSSetWindowAlpha(border->cid, border->wid, opacity) == kCGErrorSuccess)
-    border->opacity = opacity;
+  if (border->wid && fabs(border->opacity - opacity) > .001) {
+    bool complete = true;
+    for (int i = 0; i < border_surface_count(border); i++) {
+      uint32_t wid = border_surface_id(border, i);
+      if (wid && SLSSetWindowAlpha(border->cid, wid, opacity) != kCGErrorSuccess)
+        complete = false;
+    }
+    if (complete) border->opacity = opacity;
+  }
 }
 
 void border_update_geometry(struct border* border) {
@@ -647,10 +755,14 @@ void border_reorder(struct border* border) {
   int sub_level = window_sub_level(border->cid, border->target_wid);
   CFTypeRef transaction = SLSTransactionCreate(border->cid);
   if (transaction) {
-    SLSTransactionSetWindowLevel(transaction, border->wid, level);
-    SLSTransactionSetWindowSubLevel(transaction, border->wid, sub_level);
-    SLSTransactionOrderWindow(transaction, border->wid, border_display_order(settings),
-                             border->target_wid);
+    for (int i = 0; i < border_surface_count(border); i++) {
+      uint32_t wid = border_surface_id(border, i);
+      if (!wid) continue;
+      SLSTransactionSetWindowLevel(transaction, wid, level);
+      SLSTransactionSetWindowSubLevel(transaction, wid, sub_level);
+      SLSTransactionOrderWindow(transaction, wid, border_display_order(settings),
+                               border->target_wid);
+    }
     SLSTransactionCommit(transaction, 0);
     // Match the existing transaction paths: the private commit return is not
     // a reliable acknowledgement. Cache the target metadata we actually read.
@@ -668,10 +780,10 @@ void border_hide(struct border* border) {
   if (border->wid) {
     CFTypeRef transaction = SLSTransactionCreate(border->cid);
     if (transaction) {
-      SLSTransactionOrderWindow(transaction,
-                                border->wid,
-                                0,
-                                border->target_wid);
+      for (int i = 0; i < border_surface_count(border); i++) {
+        uint32_t wid = border_surface_id(border, i);
+        if (wid) SLSTransactionOrderWindow(transaction, wid, 0, border->target_wid);
+      }
       SLSTransactionCommit(transaction, 0);
       CFRelease(transaction);
     }
@@ -692,10 +804,11 @@ void border_unhide(struct border* border) {
     struct settings* settings = border_get_settings(border);
     CFTypeRef transaction = SLSTransactionCreate(border->cid);
     if (transaction) {
-      SLSTransactionOrderWindow(transaction,
-                                border->wid,
-                                border_display_order(settings),
-                                border->target_wid      );
+      for (int i = 0; i < border_surface_count(border); i++) {
+        uint32_t wid = border_surface_id(border, i);
+        if (wid) SLSTransactionOrderWindow(transaction, wid,
+                         border_display_order(settings), border->target_wid);
+      }
       SLSTransactionCommit(transaction, 0);
       CFRelease(transaction);
       border->visible = true;

@@ -129,6 +129,24 @@ void windows_reconcile_snapshot(struct table* windows, CFArrayRef snapshot) {
       uint32_t wid = border->target_wid;
       const struct observed_window* source = find_window(observed, valid, wid);
       const struct observed_window* overlay = find_window(observed, valid, border->wid);
+      bool all_overlays_visible = overlay && overlay->alpha > 0;
+      bool any_overlay_visible = all_overlays_visible;
+      bool overlays_placed = true;
+      if (border->segmented_knit) {
+        for (int segment = 1; segment < 4; segment++) {
+          CGRect rect = border->segment_rects[segment];
+          if (rect.size.width <= 0 || rect.size.height <= 0) continue;
+          const struct observed_window* side = find_window(observed, valid,
+                                           border->extra_segments[segment - 1].wid);
+          if (side && side->alpha > 0) any_overlay_visible = true;
+          else all_overlays_visible = false;
+          if (source && side) {
+            bool placed = side->rank < source->rank
+                       && side->rank > source->previous_foreign;
+            if (!placed) overlays_placed = false;
+          }
+        }
+      }
       if (trace) {
         CGRect model = CGRectZero;
         SLSGetWindowBounds(border->cid, wid, &model);
@@ -147,7 +165,7 @@ void windows_reconcile_snapshot(struct table* windows, CFArrayRef snapshot) {
         border->missing_overlay_snapshots = 0;
         // Ordered-in flags alone can outlive actual onscreen visibility. Hide
         // first; keep a hidden/minimized target available for restoration.
-        if (border->visible || (overlay && overlay->alpha > 0)) windows_window_hide(windows, wid);
+        if (border->visible || any_overlay_visible) windows_window_hide(windows, wid);
         if (++border->missing_snapshots >= 10) {
           border->missing_snapshots = 0;
           if (!window_exists(wid)) windows_window_destroy(windows, wid, 0);
@@ -201,7 +219,7 @@ void windows_reconcile_snapshot(struct table* windows, CFArrayRef snapshot) {
       // onscreen. Try the cheap restore first, then replace a stranded surface
       // after three settled snapshots. Never rebuild during resize/animation,
       // while the source is hidden, or more than once per second.
-      if (!overlay || overlay->alpha <= 0) {
+      if (!all_overlays_visible) {
         if (++border->missing_overlay_snapshots >= 3 && now >= border->overlay_rebuild_after) {
           border_reset_surface(border);
           border->missing_overlay_snapshots = 0;
@@ -209,7 +227,7 @@ void windows_reconcile_snapshot(struct table* windows, CFArrayRef snapshot) {
           border->space_check_after = 0;
         }
       } else border->missing_overlay_snapshots = 0;
-      if (!border->visible || !overlay || overlay->alpha <= 0) {
+      if (!border->visible || !all_overlays_visible) {
         border->metadata_dirty = true;
         border_update_geometry_from_snapshot(border, geometry, source->alpha);
       } else if (!CGRectEqualToRect(geometry, border->target_bounds)
@@ -217,11 +235,12 @@ void windows_reconcile_snapshot(struct table* windows, CFArrayRef snapshot) {
                  || !border->geometry_valid || border->needs_redraw || border->metadata_dirty) {
         border_update_geometry_from_snapshot(border, geometry, source->alpha);
       } else {
-        int order = border_get_settings(border)->border_order;
+        int order = border_get_settings(border)->border_style == BORDER_STYLE_KNIT
+                    ? BORDER_ORDER_ABOVE : border_get_settings(border)->border_order;
         bool placed = order == BORDER_ORDER_BELOW
           ? overlay->rank > source->rank && overlay->rank < source->next_foreign
           : overlay->rank < source->rank && overlay->rank > source->previous_foreign;
-        if (!placed) border_reorder(border);
+        if (!placed || !overlays_placed) border_reorder(border);
       }
       bucket = next;
     }

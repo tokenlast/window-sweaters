@@ -108,6 +108,16 @@ struct border {
   CGRect target_bounds;
   CGRect drawing_bounds;
   CGContextRef context;
+  // Knitted borders use four narrow backing surfaces. The first surface uses
+  // wid/context above for compatibility with the tracking and proxy paths.
+  bool segmented_knit;
+  float segment_band;
+  float segment_radius;
+  CGRect segment_rects[4]; // local drawing coordinates, disjoint
+  struct {
+    uint32_t wid;
+    CGContextRef context;
+  } extra_segments[3];
 
   struct animation animation;
   struct event_buffer event_buffer;
