@@ -80,6 +80,34 @@ static void border_split_knit(struct border* border, CGRect frame, float band) {
   border->segment_rects[3] = CGRectMake(frame.size.width - depth, depth, depth, middle);
 }
 
+// Chrome places tabs and the traffic-light buttons against its window edges.
+// Leave only a fine edge beside those controls, then ease back to the chosen
+// sweater width below the title bar. The rest of the ring is unchanged.
+static CGPathRef border_chrome_titlebar_clip(CGRect frame, float band) {
+  float width = frame.size.width, height = frame.size.height;
+  float titlebar = fminf(44.f, height * .5f);
+  float shoulder = height - titlebar;
+  float taper_end = height - fminf(18.f, titlebar * .5f);
+  float edge = fminf(2.f, band);
+  float side = fminf(band + 2.f, width * .5f);
+  CGMutablePathRef clip = CGPathCreateMutable();
+  CGPathAddRect(clip, NULL, CGRectMake(0, 0, width, shoulder));
+  CGPathMoveToPoint(clip, NULL, 0, shoulder);
+  CGPathAddLineToPoint(clip, NULL, side, shoulder);
+  CGPathAddLineToPoint(clip, NULL, edge, taper_end);
+  CGPathAddLineToPoint(clip, NULL, edge, height);
+  CGPathAddLineToPoint(clip, NULL, 0, height);
+  CGPathCloseSubpath(clip);
+  CGPathMoveToPoint(clip, NULL, width, shoulder);
+  CGPathAddLineToPoint(clip, NULL, width, height);
+  CGPathAddLineToPoint(clip, NULL, width - edge, height);
+  CGPathAddLineToPoint(clip, NULL, width - edge, taper_end);
+  CGPathAddLineToPoint(clip, NULL, width - side, shoulder);
+  CGPathCloseSubpath(clip);
+  CGPathAddRect(clip, NULL, CGRectMake(0, height - edge, width, edge));
+  return clip;
+}
+
 // The knit now lives within the target's rectangle. It must be ordered above
 // that window to remain visible; the legacy outline styles retain their order.
 static int border_display_order(const struct settings* settings) {
@@ -221,6 +249,9 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
     // 9 pt outer arc, not a 12 pt one with transparent corner gaps.
     CGRect inner = CGRectInset(border->drawing_bounds,
                                settings->border_width, settings->border_width);
+    CGPathRef titlebar_clip = g_knit_on && strcmp(border->app, "Google Chrome") == 0
+                                ? border_chrome_titlebar_clip(frame, settings->border_width)
+                                : NULL;
     for (int i = 0; i < border_surface_count(border); i++) {
       uint32_t wid = border_surface_id(border, i);
       CGContextRef context = border_surface_context(border, i);
@@ -232,6 +263,10 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
       if (g_knit_on) {
         CGContextClipToRect(context, local);
         CGContextTranslateCTM(context, -segment.origin.x, -segment.origin.y);
+        if (titlebar_clip) {
+          CGContextAddPath(context, titlebar_clip);
+          CGContextClip(context);
+        }
         knit_draw_inside(context, inner, border->radius, settings->border_width,
                          yarn, chart, border->focused ? 0.f : g_knit_dim);
       }
@@ -240,6 +275,7 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
       SLSFlushWindowContentRegion(border->cid, wid, NULL);
       SLSWindowThaw(border->cid, wid);
     }
+    if (titlebar_clip) CGPathRelease(titlebar_clip);
     return;
   }
 
