@@ -78,7 +78,7 @@ cd window-sweaters
 python3 scripts/install-local.py
 ```
 
-This builds `outputs/Window Sweaters.app`, installs it in `~/Applications`, and opens it. The installer backs up any previous local installation before replacing it.
+This builds a verified `outputs/Window Sweaters.zip`, installs the app in `~/Applications`, and opens it. The installer backs up any previous local installation before replacing it.
 
 ## Your own colourways
 

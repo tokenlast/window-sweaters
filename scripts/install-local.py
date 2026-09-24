@@ -9,17 +9,21 @@ import tempfile
 import time
 
 root = Path(__file__).resolve().parents[1]
-source = root / 'outputs/Window Sweaters.app'
+archive = root / 'outputs/Window Sweaters.zip'
 apps = Path.home() / 'Applications'
-destination = apps / source.name
+destination = apps / 'Window Sweaters.app'
 legacy = apps / 'Knit Borders.app'
 identifier = 'local.knitborders.app'
 
 def info(app):
     return plistlib.loads((app / 'Contents/Info.plist').read_bytes())
 
-if not source.exists():
+if not archive.exists():
     raise SystemExit('Build first: ./scripts/build-app.sh')
+stage = Path(tempfile.mkdtemp(prefix='window-sweaters-extract-'))
+subprocess.run(['ditto', '-x', '-k', str(archive), str(stage)], check=True)
+source = stage / destination.name
+subprocess.run(['xattr', '-cr', str(source)], check=True)
 assert info(source)['CFBundleIdentifier'] == identifier
 subprocess.run(['codesign', '--verify', '--deep', '--strict', str(source)], check=True)
 existing = [p for p in (destination, legacy) if p.exists()]
@@ -34,6 +38,7 @@ for app in existing:
 executables = {str(p / 'Contents/MacOS' / info(p)['CFBundleExecutable']) for p in existing + [source]}
 # A previously installed copy may run from this repository's build folder.
 executables.add(str(root / 'outputs/Knit Borders.app/Contents/MacOS/KnitBorders'))
+executables.add(str(root / 'outputs/Window Sweaters.app/Contents/MacOS/WindowSweaters'))
 
 def running():
     lines = subprocess.check_output(['ps', '-axo', 'pid=,comm='], text=True).splitlines()
@@ -55,7 +60,9 @@ for app in existing:
     # Move rather than delete the previous bundle, retaining a recoverable copy.
     app.rename(backup / app.name)
 subprocess.run(['ditto', str(source), str(destination)], check=True)
+subprocess.run(['xattr', '-cr', str(destination)], check=True)
 subprocess.run(['codesign', '--verify', '--deep', '--strict', str(destination)], check=True)
 subprocess.run([lsregister, '-f', str(destination)], check=True)
 subprocess.run(['open', str(destination)], check=True)
 print(f'Installed: {destination}\nPrevious app backup: {backup}')
+subprocess.run(['trash', str(stage)], check=True)

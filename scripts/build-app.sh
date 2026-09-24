@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/outputs/Window Sweaters.app"
+ZIP="$ROOT/outputs/Window Sweaters.zip"
 STAGE="$(mktemp -d /tmp/window-sweaters-build.XXXXXX)"
 trap 'trash "$STAGE"' EXIT
 
@@ -26,8 +26,9 @@ codesign --force --deep --sign - "$STAGE/Window Sweaters.app"
 codesign --verify --deep --strict "$STAGE/Window Sweaters.app"
 
 mkdir -p "$ROOT/outputs"
-if [[ -e "$APP" ]]; then trash "$APP"; fi
-ditto "$STAGE/Window Sweaters.app" "$APP"
-xattr -cr "$APP"
-codesign --verify --deep --strict "$APP"
-echo "$APP"
+if [[ -e "$ZIP" ]]; then trash "$ZIP"; fi
+ditto -c -k --keepParent --norsrc "$STAGE/Window Sweaters.app" "$ZIP"
+mkdir -p "$STAGE/verify"
+ditto -x -k "$ZIP" "$STAGE/verify"
+codesign --verify --deep --strict "$STAGE/verify/Window Sweaters.app"
+echo "$ZIP"
