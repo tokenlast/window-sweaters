@@ -26,7 +26,7 @@ If macOS blocks it, open **System Settings → Privacy & Security → Open Anywa
 
 ## Make yourself cosy
 
-Click the yarn icon in your menu bar to change the style, pattern, border width, and stitch size. You can also pause the sweaters or quit from there. **Preferences** opens a window with the same controls in a sidebar layout.
+Opening Window Sweaters brings up **Preferences**. The sidebar contains the style, pattern, border width, stitch size, and app controls. You can also reach Preferences from the yarn icon in your menu bar, pause the sweaters, or quit from there.
 
 The knit sits outside each window, leaving tabs, close buttons, and the rest of the app unobstructed. **Keep Sweaters Within Screen Edges** reserves room equal to the border width around the usable area of each display. Window Sweaters moves or resizes decorated windows when they cross that margin, including while you drag them. The same switch is in **Preferences → General**.
 

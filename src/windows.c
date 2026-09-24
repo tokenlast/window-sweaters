@@ -259,6 +259,11 @@ static void padding_settle_after(struct table* windows, uint32_t wid,
     }
     current->padding_followup_pending = false;
     if (padding_enforce(current, true)) border_update_geometry(current);
+    // AX can report kAXErrorCannotComplete for a newly created Chrome window
+    // while its accessibility tree is still coming up. Retry a few times so
+    // a missed first correction does not leave the sweater under the menu bar.
+    if (current->padding_retry_pending && current->padding_retry_count++ < 3)
+      schedule_padding_settle(windows, current);
   });
 }
 
@@ -373,11 +378,11 @@ static bool windows_window_focus(struct table* windows, uint32_t wid) {
 void windows_window_move(struct table* windows, uint32_t wid) {
   struct border* border = table_find(windows, &wid);
   if (border) {
-    // Keep a dragged window within the padded work area as it moves. Size
-    // changes are handled after the native resize or Zoom has settled.
-    if (CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState,
-                                 kCGMouseButtonLeft))
-      padding_enforce(border, false);
+    // WindowServer's move notification is the reliable signal here: the
+    // global mouse-button query can be false while Chrome is actively moving.
+    // Position correction is throttled inside padding_enforce; size changes
+    // still wait for native resize/Zoom to settle.
+    padding_enforce(border, false);
     schedule_padding_settle(windows, border);
   }
   if (border) last_geometry_event_ns = geometry_time_ns();

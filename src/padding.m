@@ -151,6 +151,12 @@ bool padding_enforce(struct border* border, bool allow_resize) {
       || !isfinite(actual.origin.x) || !isfinite(actual.origin.y)
       || !isfinite(actual.size.width) || !isfinite(actual.size.height)
       || actual.size.width <= 0 || actual.size.height <= 0) return false;
+  // A move notification can also arrive during a native resize animation.
+  // Leave those frames alone and resize once the window has gone quiet.
+  if (!allow_resize && border->geometry_valid
+      && (fabs(actual.size.width - border->target_bounds.size.width) > 0.5
+          || fabs(actual.size.height - border->target_bounds.size.height) > 0.5))
+    return false;
   struct padded_screen* screen = screen_for_window(actual);
   if (!screen) return false;
 
@@ -174,21 +180,22 @@ bool padding_enforce(struct border* border, bool allow_resize) {
               || fabs(desired.origin.y - actual.origin.y) > 0.5;
   if (!resize && !move) {
     border->padding_attempt_valid = false;
+    border->padding_retry_pending = false;
+    border->padding_retry_count = 0;
     return false;
   }
-  bool dragging = CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState,
-                                            kCGMouseButtonLeft);
+  bool live_move = !allow_resize;
   CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
   // AX writes run on the UI thread; never issue more than one per display
   // frame, even when Chrome reports a slightly different position each time.
-  if (dragging && border->padding_attempt_valid
+  if (live_move && border->padding_attempt_valid
       && now - border->padding_last_attempt_at < 0.016) return false;
   if (border->padding_attempt_valid
       && CGRectEqualToRect(border->padding_last_attempt, actual)) {
     // A zoomed or non-movable app can accept an AX write but then restore the
     // same frame. Do not fight it indefinitely. During a drag, retry at most
     // once per display frame so the edge still feels firm.
-    if (!dragging) return false;
+    if (!live_move && !border->padding_retry_pending) return false;
   }
   if (padding_trace())
     fprintf(stderr, "padding request pid=%d wid=%u %.0f,%.0f %.0fx%.0f -> %.0f,%.0f %.0fx%.0f\n",
@@ -200,11 +207,14 @@ bool padding_enforce(struct border* border, bool allow_resize) {
     return false;
   }
 
-  AXUIElementRef window = ax_window_for_border(border);
-  if (!window) return false;
   border->padding_last_attempt = actual;
   border->padding_last_attempt_at = now;
   border->padding_attempt_valid = true;
+  AXUIElementRef window = ax_window_for_border(border);
+  if (!window) {
+    border->padding_retry_pending = true;
+    return false;
+  }
   CFTypeRef fullscreen = NULL;
   if (AXUIElementCopyAttributeValue(window, CFSTR("AXFullScreen"), &fullscreen)
         == kAXErrorSuccess && fullscreen) {
@@ -227,7 +237,10 @@ bool padding_enforce(struct border* border, bool allow_resize) {
       if (is_zoomed) {
         AXError unzoom = AXUIElementSetAttributeValue(window, CFSTR("AXZoomed"),
                                                      kCFBooleanFalse);
-        if (unzoom == kAXErrorSuccess) return true;
+        if (unzoom == kAXErrorSuccess) {
+          border->padding_retry_pending = true;
+          return true;
+        }
       }
     }
     Boolean resizable = false;
@@ -248,6 +261,10 @@ bool padding_enforce(struct border* border, bool allow_resize) {
   if (error == kAXErrorInvalidUIElement || error == kAXErrorCannotComplete) {
     CFRelease(border->ax_window);
     border->ax_window = NULL;
+    border->padding_retry_pending = true;
+  } else if (error == kAXErrorSuccess) {
+    border->padding_retry_pending = false;
+    border->padding_retry_count = 0;
   }
   if (padding_trace()) fprintf(stderr, "padding result wid=%u error=%d\n",
                                border->target_wid, error);

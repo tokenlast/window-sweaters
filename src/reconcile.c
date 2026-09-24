@@ -2,6 +2,7 @@
 #include "windows.h"
 #include "misc/extern.h"
 #include "misc/knit.h"
+#include "padding.h"
 #include <math.h>
 
 extern struct table g_windows;
@@ -132,6 +133,7 @@ void windows_reconcile_snapshot(struct table* windows, CFArrayRef snapshot) {
       bool all_overlays_visible = overlay && overlay->alpha > 0;
       bool any_overlay_visible = all_overlays_visible;
       bool overlays_placed = true;
+      int order = border_get_settings(border)->border_order;
       if (border->segmented_knit) {
         for (int segment = 1; segment < 4; segment++) {
           CGRect rect = border->segment_rects[segment];
@@ -141,8 +143,9 @@ void windows_reconcile_snapshot(struct table* windows, CFArrayRef snapshot) {
           if (side && side->alpha > 0) any_overlay_visible = true;
           else all_overlays_visible = false;
           if (source && side) {
-            bool placed = side->rank < source->rank
-                       && side->rank > source->previous_foreign;
+            bool placed = order == BORDER_ORDER_BELOW
+              ? side->rank > source->rank && side->rank < source->next_foreign
+              : side->rank < source->rank && side->rank > source->previous_foreign;
             if (!placed) overlays_placed = false;
           }
         }
@@ -192,6 +195,17 @@ void windows_reconcile_snapshot(struct table* windows, CFArrayRef snapshot) {
         bucket = next;
         continue;
       }
+      // Some apps defer MOVE notifications until the mouse is released. This
+      // pass already reads their current geometry, so keep the outer knit
+      // inside the work area even on that notification path.
+      if (border->geometry_valid
+          && fabs(geometry.size.width - border->target_bounds.size.width) <= .5
+          && fabs(geometry.size.height - border->target_bounds.size.height) <= .5
+          && (fabs(geometry.origin.x - border->target_bounds.origin.x) > .5
+              || fabs(geometry.origin.y - border->target_bounds.origin.y) > .5)) {
+        if (padding_enforce(border, false))
+          SLSGetWindowBounds(border->cid, wid, &geometry);
+      }
       // Do not alternate presentation/model sizes in the settling timer.
       // Wait for them to agree before restoring a suppressed resize border.
       if (border->resize_suppressed
@@ -235,8 +249,6 @@ void windows_reconcile_snapshot(struct table* windows, CFArrayRef snapshot) {
                  || !border->geometry_valid || border->needs_redraw || border->metadata_dirty) {
         border_update_geometry_from_snapshot(border, geometry, source->alpha);
       } else {
-        int order = border_get_settings(border)->border_style == BORDER_STYLE_KNIT
-                    ? BORDER_ORDER_ABOVE : border_get_settings(border)->border_order;
         bool placed = order == BORDER_ORDER_BELOW
           ? overlay->rank > source->rank && overlay->rank < source->next_foreign
           : overlay->rank < source->rank && overlay->rank > source->previous_foreign;

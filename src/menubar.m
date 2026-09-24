@@ -1086,6 +1086,16 @@ static KnitMenu* g_menu = nil;
   // Show at a glance whether sweaters are on. Without this the icon looks
   // identical either way, so "switched off" is indistinguishable from "broken".
   [g_menu updateStatus];
+
+  // This is an accessory app with no Dock icon, so the menu item can be hard
+  // to discover. Give every fresh launch a visible route into its controls.
+  dispatch_async(dispatch_get_main_queue(), ^{ [g_menu openPreferences:nil]; });
+}
+
+- (BOOL)applicationShouldHandleReopen:(NSApplication*)app
+                    hasVisibleWindows:(BOOL)hasVisibleWindows {
+  [g_menu openPreferences:nil];
+  return YES;
 }
 @end
 

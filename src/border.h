@@ -102,6 +102,8 @@ struct border {
   CGRect padding_last_attempt;
   CFAbsoluteTime padding_last_attempt_at;
   bool padding_attempt_valid;
+  bool padding_retry_pending;
+  unsigned padding_retry_count;
   bool padding_followup_pending;
   uint64_t padding_followup_id;
   uint64_t padding_followup_deadline;
