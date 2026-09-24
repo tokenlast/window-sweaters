@@ -16,13 +16,15 @@ all: | bin
 	clang $(ARCHS) $(DEPLOY) -O3 -g -Isrc -fobjc-arc -c src/menubar.m -o bin/menubar.o
 	clang $(ARCHS) $(DEPLOY) -O3 -g -Isrc -fobjc-arc -c src/autoyarn.m -o bin/autoyarn.o
 	clang $(ARCHS) $(DEPLOY) -O3 -g -Isrc -fobjc-arc -c src/hidden.m -o bin/hidden.o
-	clang $(ARCHS) $(DEPLOY) -std=c99 -O3 -g -Isrc $(CFILES) bin/menubar.o bin/autoyarn.o bin/hidden.o -o bin/borders $(LIBS)
+	clang $(ARCHS) $(DEPLOY) -O3 -g -Isrc -fobjc-arc -c src/padding.m -o bin/padding.o
+	clang $(ARCHS) $(DEPLOY) -std=c99 -O3 -g -Isrc $(CFILES) bin/menubar.o bin/autoyarn.o bin/hidden.o bin/padding.o -o bin/borders $(LIBS)
 
 debug: | bin
 	clang -O0 -g -Isrc -fobjc-arc -c src/menubar.m -o bin/menubar.o
 	clang -O0 -g -Isrc -fobjc-arc -c src/autoyarn.m -o bin/autoyarn.o
 	clang -O0 -g -Isrc -fobjc-arc -c src/hidden.m -o bin/hidden.o
-	clang -std=c99 -O0 -g -DDEBUG -Isrc $(CFILES) bin/menubar.o bin/autoyarn.o bin/hidden.o -o bin/debug $(LIBS)
+	clang -O0 -g -Isrc -fobjc-arc -c src/padding.m -o bin/padding.o
+	clang -std=c99 -O0 -g -DDEBUG -Isrc $(CFILES) bin/menubar.o bin/autoyarn.o bin/hidden.o bin/padding.o -o bin/debug $(LIBS)
 
 bin:
 	mkdir bin

@@ -10,12 +10,14 @@
 #include "misc/chart.h"
 #include "misc/apps.h"
 #include "misc/overrides.h"
+#include "padding.h"
 #include "misc/status_icon.h"
 #include <stdio.h>
 
 extern void knit_apply(const char* arg);   // main.c: feeds one "key=value"
 extern void knit_apps_filter_changed(void); // main.c: re-run the app gate
 extern void knit_app_overrides_changed(void) __attribute__((weak_import));
+extern void knit_padding_changed(void);
 extern bool g_knit_on;
 
 enum { KNIT_MENU_HEADER_TAG = 0x6864 };   // a label, not a command
@@ -384,6 +386,18 @@ static void knit_load_prefs(void) {
   [self rebuildPreferences];
 }
 
+- (void)togglePadding:(id)sender {
+  padding_set_enabled(!padding_enabled());
+  knit_padding_changed();
+  [self rebuildPreferences];
+}
+
+- (void)preferencePaddingToggle:(NSButton*)sender {
+  padding_set_enabled(sender.state == NSControlStateValueOn);
+  knit_padding_changed();
+  [self rebuildPreferences];
+}
+
 - (void)toggleApp:(NSMenuItem*)sender {
   const char* bundleID = [sender.representedObject UTF8String];
   if (!knit_app_set_hidden(bundleID, !knit_app_hidden(bundleID))) return;
@@ -720,6 +734,13 @@ static void knit_load_prefs(void) {
     [self.preferencesDetail addSubview:enabled];
     [self preferenceLabel:@"Sweaters follow your windows while this app is running."
                            y:366 bold:NO];
+    NSButton* padding = [NSButton checkboxWithTitle:@"Keep sweaters within screen edges"
+        target:self action:@selector(preferencePaddingToggle:)];
+    padding.frame = NSMakeRect(28, 309, 390, 28);
+    padding.state = padding_enabled() ? NSControlStateValueOn : NSControlStateValueOff;
+    [self.preferencesDetail addSubview:padding];
+    [self preferenceLabel:@"Reserves room outside decorated windows. Requires Accessibility."
+                           y:275 bold:NO];
     NSButton* quit = [NSButton buttonWithTitle:@"Quit Window Sweaters"
         target:self action:@selector(quit:)];
     quit.frame = NSMakeRect(28, 52, 180, 32);
@@ -926,6 +947,10 @@ static void knit_load_prefs(void) {
   [menu removeAllItems];
   [self addAction:menu title:@"Show Sweater Borders" selector:@selector(toggle:)];
   [menu itemAtIndex:0].state = g_knit_on ? NSControlStateValueOn : NSControlStateValueOff;
+  [self addAction:menu title:@"Keep Sweaters Within Screen Edges"
+                         selector:@selector(togglePadding:)];
+  [menu itemAtIndex:1].state = padding_enabled() ? NSControlStateValueOn
+                                                : NSControlStateValueOff;
 
   [self buildApps:[self submenu:menu title:@"Apps"]];
 

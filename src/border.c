@@ -66,12 +66,13 @@ static CGPoint border_surface_origin(const struct border* border, CGPoint origin
 }
 
 static void border_split_knit(struct border* border, CGRect frame, float band) {
-  // At a rounded corner the ring can reach farther inward than its straight
-  // edge. Include that diagonal reach and one antialiasing point in each strip.
+  // The window begins after transparent padding and the outer knit band.
+  // Leave enough strip depth for the rounded corners without allocating a
+  // full-window backing surface.
   float radius = fmaxf(0.f, fminf(border->radius,
                        fminf(frame.size.width, frame.size.height) * .5f));
-  float inner_radius = fmaxf(0.f, radius - band - 1.f);
-  float reach = ceilf(band + 2.f + inner_radius * (1.f - (float)M_SQRT1_2));
+  float reach = ceilf(BORDER_PADDING + band + 2.f
+                      + radius * (1.f - (float)M_SQRT1_2));
   float depth = fminf(reach, fminf(frame.size.width, frame.size.height) * .5f);
   float middle = frame.size.height - 2.f * depth;
   border->segment_rects[0] = CGRectMake(0, frame.size.height - depth, frame.size.width, depth);
@@ -80,39 +81,8 @@ static void border_split_knit(struct border* border, CGRect frame, float band) {
   border->segment_rects[3] = CGRectMake(frame.size.width - depth, depth, depth, middle);
 }
 
-// Chrome places tabs and the traffic-light buttons against its window edges.
-// Leave only a fine edge beside those controls, then ease back to the chosen
-// sweater width below the title bar. The rest of the ring is unchanged.
-static CGPathRef border_chrome_titlebar_clip(CGRect frame, float band) {
-  float width = frame.size.width, height = frame.size.height;
-  float titlebar = fminf(44.f, height * .5f);
-  float shoulder = height - titlebar;
-  float taper_end = height - fminf(18.f, titlebar * .5f);
-  float edge = fminf(2.f, band);
-  float side = fminf(band + 2.f, width * .5f);
-  CGMutablePathRef clip = CGPathCreateMutable();
-  CGPathAddRect(clip, NULL, CGRectMake(0, 0, width, shoulder));
-  CGPathMoveToPoint(clip, NULL, 0, shoulder);
-  CGPathAddLineToPoint(clip, NULL, side, shoulder);
-  CGPathAddLineToPoint(clip, NULL, edge, taper_end);
-  CGPathAddLineToPoint(clip, NULL, edge, height);
-  CGPathAddLineToPoint(clip, NULL, 0, height);
-  CGPathCloseSubpath(clip);
-  CGPathMoveToPoint(clip, NULL, width, shoulder);
-  CGPathAddLineToPoint(clip, NULL, width, height);
-  CGPathAddLineToPoint(clip, NULL, width - edge, height);
-  CGPathAddLineToPoint(clip, NULL, width - edge, taper_end);
-  CGPathAddLineToPoint(clip, NULL, width - side, shoulder);
-  CGPathCloseSubpath(clip);
-  CGPathAddRect(clip, NULL, CGRectMake(0, height - edge, width, edge));
-  return clip;
-}
-
-// The knit now lives within the target's rectangle. It must be ordered above
-// that window to remain visible; the legacy outline styles retain their order.
 static int border_display_order(const struct settings* settings) {
-  return settings->border_style == BORDER_STYLE_KNIT
-         ? BORDER_ORDER_ABOVE : settings->border_order;
+  return settings->border_order;
 }
 
 struct settings* border_get_settings(struct border* border) {
@@ -182,32 +152,17 @@ static bool border_calculate_bounds(struct border* border, CGRect* frame, struct
 
   border->target_bounds = window_frame;
   border->too_small = border_check_too_small(border, window_frame);
-  if (settings->border_style == BORDER_STYLE_KNIT
-      && (window_frame.size.width <= 2.f * settings->border_width + 2.f
-          || window_frame.size.height <= 2.f * settings->border_width + 2.f))
-    border->too_small = true;
   if (border->too_small) {
     border_hide(border);
     return false;
   }
 
-  if (settings->border_style == BORDER_STYLE_KNIT) {
-    // Keep the whole overlay in the native window's bounds. macOS already
-    // stops that window at the menu bar and display edges when it is dragged.
-    // The ring is drawn inward from this rect, so none of its pixels extend
-    // into the menu bar or over adjacent desktop content.
-    *frame = window_frame;
-    border->origin = frame->origin;
-    frame->origin = CGPointZero;
-    border->drawing_bounds = *frame;
-  } else {
-    float border_offset = -settings->border_width - BORDER_PADDING;
-    *frame = CGRectInset(window_frame, border_offset, border_offset);
-    border->origin = frame->origin;
-    frame->origin = CGPointZero;
-    window_frame.origin = (CGPoint){ -border_offset, -border_offset };
-    border->drawing_bounds = window_frame;
-  }
+  float border_offset = -settings->border_width - BORDER_PADDING;
+  *frame = CGRectInset(window_frame, border_offset, border_offset);
+  border->origin = frame->origin;
+  frame->origin = CGPointZero;
+  window_frame.origin = (CGPoint){ -border_offset, -border_offset };
+  border->drawing_bounds = window_frame;
 
   return true;
 }
@@ -244,14 +199,6 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
         knit_auto_recolor(border->app, border->owner_pid, yarn, &chart,
                           overrides & KNIT_OVERRIDE_CHART);
     }
-    // Inset the input so the outer edge follows the actual window. Pass the
-    // native outer radius: a 12 pt band around a 9 pt corner still needs a
-    // 9 pt outer arc, not a 12 pt one with transparent corner gaps.
-    CGRect inner = CGRectInset(border->drawing_bounds,
-                               settings->border_width, settings->border_width);
-    CGPathRef titlebar_clip = g_knit_on && strcmp(border->app, "Google Chrome") == 0
-                                ? border_chrome_titlebar_clip(frame, settings->border_width)
-                                : NULL;
     for (int i = 0; i < border_surface_count(border); i++) {
       uint32_t wid = border_surface_id(border, i);
       CGContextRef context = border_surface_context(border, i);
@@ -263,19 +210,16 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
       if (g_knit_on) {
         CGContextClipToRect(context, local);
         CGContextTranslateCTM(context, -segment.origin.x, -segment.origin.y);
-        if (titlebar_clip) {
-          CGContextAddPath(context, titlebar_clip);
-          CGContextClip(context);
-        }
-        knit_draw_inside(context, inner, border->radius, settings->border_width,
-                         yarn, chart, border->focused ? 0.f : g_knit_dim);
+        knit_draw(context, border->drawing_bounds, border->radius,
+                  settings->border_width, yarn, chart,
+                  border->focused ? 0.f : g_knit_dim,
+                  settings->border_order == BORDER_ORDER_ABOVE ? 1.f : g_knit.tuck);
       }
       CGContextFlush(context);
       CGContextRestoreGState(context);
       SLSFlushWindowContentRegion(border->cid, wid, NULL);
       SLSWindowThaw(border->cid, wid);
     }
-    if (titlebar_clip) CGPathRelease(titlebar_clip);
     return;
   }
 
@@ -628,6 +572,7 @@ void border_destroy(struct border* border) {
     border_destroy_window(border);
     if (border->proxy) border_destroy(border->proxy);
     animation_stop(&border->animation);
+    if (border->ax_window) CFRelease(border->ax_window);
     if (!border->is_proxy && border->cid != SLSMainConnectionID())
       SLSReleaseConnection(border->cid);
     pthread_mutex_unlock(&border->mutex);
@@ -685,10 +630,8 @@ static void border_apply_geometry(struct border* border, CGRect window_frame) {
     pthread_mutex_unlock(&border->mutex);
     return;
   }
-  CGPoint origin = settings->border_style == BORDER_STYLE_KNIT
-                    ? window_frame.origin
-                    : (CGPoint){ .x = window_frame.origin.x - settings->border_width - BORDER_PADDING,
-                                 .y = window_frame.origin.y - settings->border_width - BORDER_PADDING };
+  CGPoint origin = { .x = window_frame.origin.x - settings->border_width - BORDER_PADDING,
+                     .y = window_frame.origin.y - settings->border_width - BORDER_PADDING };
 
   CFTypeRef transaction = SLSTransactionCreate(border->cid);
   if (transaction) {

@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/outputs/Window Sweaters.app"
 STAGE="$(mktemp -d /tmp/window-sweaters-build.XXXXXX)"
-trap 'rm -rf "$STAGE"' EXIT
+trap 'trash "$STAGE"' EXIT
 
 make -C "$ROOT" >/dev/null
 
@@ -26,6 +26,8 @@ codesign --force --deep --sign - "$STAGE/Window Sweaters.app"
 codesign --verify --deep --strict "$STAGE/Window Sweaters.app"
 
 mkdir -p "$ROOT/outputs"
-rm -rf "$APP"
+if [[ -e "$APP" ]]; then trash "$APP"; fi
 ditto "$STAGE/Window Sweaters.app" "$APP"
+xattr -cr "$APP"
+codesign --verify --deep --strict "$APP"
 echo "$APP"

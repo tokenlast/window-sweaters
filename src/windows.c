@@ -7,11 +7,14 @@ extern int g_knit_trace;
 #include "hashtable.h"
 #include "border.h"
 #include "misc/ax.h"
+#include "padding.h"
 #include <string.h>
 #include <libproc.h>
 
 extern pid_t g_pid;
 extern struct settings g_settings;
+
+static void schedule_padding_settle(struct table* windows, struct border* border);
 
 // Loaded via dlsym in main.c
 extern CFArrayRef (*JBSLSWindowIteratorGetCornerRadii)(CFTypeRef);
@@ -98,6 +101,7 @@ bool windows_window_create(struct table* windows, uint32_t wid, uint64_t sid) {
           border->sid = sid;
           border->metadata_dirty = true;
           border_update(border, false);
+          if (window_created) schedule_padding_settle(windows, border);
           windows_update_notifications(windows);
         }
       }
@@ -171,6 +175,15 @@ void windows_update_all(struct table* windows) {
   }
 }
 
+void windows_enforce_padding_all(struct table* windows) {
+  for (int i = 0; i < windows->capacity; i++) {
+    for (struct bucket* bucket = windows->buckets[i]; bucket; bucket = bucket->next) {
+      struct border* border = bucket->value;
+      if (border) schedule_padding_settle(windows, border);
+    }
+  }
+}
+
 void windows_update_active(struct table* windows) {
   for (int i = 0; i < windows->capacity; ++i) {
     struct bucket* bucket = windows->buckets[i];
@@ -227,6 +240,39 @@ static uint64_t geometry_time_ns(void) {
 
 static uint64_t last_geometry_event_ns;
 
+// Resize notifications include every frame of native Zoom and live resizing.
+// Let Chrome finish its animation before changing its size through AX. During
+// an ordinary mouse drag, the move path below corrects position immediately.
+static void padding_settle_after(struct table* windows, uint32_t wid,
+                                 uint64_t followup_id, int64_t delay_ns) {
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, delay_ns),
+                 dispatch_get_main_queue(), ^{
+    uint32_t target_wid = wid;
+    struct border* current = table_find(windows, &target_wid);
+    if (!current || !current->padding_followup_pending
+        || current->padding_followup_id != followup_id) return;
+    uint64_t now = geometry_time_ns();
+    if (now < current->padding_followup_deadline) {
+      padding_settle_after(windows, wid, followup_id,
+                           current->padding_followup_deadline - now);
+      return;
+    }
+    current->padding_followup_pending = false;
+    if (padding_enforce(current, true)) border_update_geometry(current);
+  });
+}
+
+static void schedule_padding_settle(struct table* windows, struct border* border) {
+  if (!padding_enabled() || border->is_proxy) return;
+  border->padding_followup_deadline = geometry_time_ns() + 150 * NSEC_PER_MSEC;
+  if (border->padding_followup_pending) return;
+  static uint64_t next_followup_id = 0;
+  border->padding_followup_pending = true;
+  border->padding_followup_id = ++next_followup_id;
+  padding_settle_after(windows, border->target_wid, border->padding_followup_id,
+                       150 * NSEC_PER_MSEC);
+}
+
 bool windows_geometry_event_recent(void) {
   uint64_t now = geometry_time_ns();
   return last_geometry_event_ns && now >= last_geometry_event_ns
@@ -255,6 +301,7 @@ static void schedule_resize_followup(struct table* windows, uint32_t wid,
 void windows_window_resize(struct table* windows, uint32_t wid) {
   struct border* border = table_find(windows, &wid);
   if (!border) return;
+  schedule_padding_settle(windows, border);
   last_geometry_event_ns = geometry_time_ns();
   if (g_knit_trace) {
     static uint64_t prev = 0;
@@ -325,6 +372,14 @@ static bool windows_window_focus(struct table* windows, uint32_t wid) {
 // not telling us promptly; if our own time is long, the fault is ours.
 void windows_window_move(struct table* windows, uint32_t wid) {
   struct border* border = table_find(windows, &wid);
+  if (border) {
+    // Keep a dragged window within the padded work area as it moves. Size
+    // changes are handled after the native resize or Zoom has settled.
+    if (CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState,
+                                 kCGMouseButtonLeft))
+      padding_enforce(border, false);
+    schedule_padding_settle(windows, border);
+  }
   if (border) last_geometry_event_ns = geometry_time_ns();
   if (g_knit_trace) {
     static uint64_t prev = 0;
@@ -346,6 +401,7 @@ void windows_window_hide(struct table* windows, uint32_t wid) {
   struct border* border = table_find(windows, &wid);
   if (border) {
     border->resize_followup_pending = false;
+    border->padding_followup_pending = false;
     border_hide(border);
   }
 }
@@ -356,6 +412,7 @@ void windows_window_unhide(struct table* windows, uint32_t wid) {
     // Hidden windows can resize or move to another space before reappearing.
     border->metadata_dirty = true;
     border_update(border, false);
+    schedule_padding_settle(windows, border);
   }
 }
 

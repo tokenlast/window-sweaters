@@ -6,6 +6,7 @@
 void windows_update_inactive(struct table* windows);
 void windows_update_active(struct table* windows);
 void windows_update_all(struct table* windows);
+void windows_enforce_padding_all(struct table* windows);
 void windows_reorder_all(struct table* windows);
 void windows_update_notifications(struct table* windows);
 

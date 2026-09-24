@@ -28,7 +28,7 @@ If macOS blocks it, open **System Settings → Privacy & Security → Open Anywa
 
 Click the yarn icon in your menu bar to change the style, pattern, border width, and stitch size. You can also pause the sweaters or quit from there. **Preferences** opens a window with the same controls in a sidebar layout.
 
-The knit sits inside each window's own bounds, so dragging a window to the top of the screen keeps its sweater below the menu bar. Because the overlay is drawn above the window, a wide sweater covers that width of the window's edge content; choose a slimmer border if an app places controls close to its edge.
+The knit sits outside each window, leaving tabs, close buttons, and the rest of the app unobstructed. **Keep Sweaters Within Screen Edges** reserves room equal to the border width around the usable area of each display. Window Sweaters moves or resizes decorated windows when they cross that margin, including while you drag them. The same switch is in **Preferences → General**.
 
 To leave an app bare, open **Apps** and untick it. Its windows lose their sweater straight away, everything else stays as it is, and it stays off until you tick it again, even after a restart. Only want sweaters on a few apps? Choose **Turn Off for All Apps**, then tick the ones you like. Apps you open later start off too.
 
@@ -36,7 +36,7 @@ In **Preferences → Apps**, **Enabled Apps** has the same on/off choices in a d
 
 **By App** gives each app its own sweater. **Zigzag** gives them all a softer, matching cream zigzag in colours taken from their icons. Try both and see what you like.
 
-If macOS asks for Accessibility access, enable Window Sweaters in **System Settings → Privacy & Security → Accessibility** so it can follow which window is focused.
+Screen-edge padding needs Accessibility access to move other apps' windows. If macOS asks, enable Window Sweaters in **System Settings → Privacy & Security → Accessibility**. Without that permission, the outer sweater still draws but cannot keep itself clear of the menu bar and display edges. Native full-screen windows are left alone.
 
 ## The sweaters
 

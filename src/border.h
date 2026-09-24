@@ -98,6 +98,13 @@ struct border {
   uint32_t wid;
   uint32_t target_wid;
   pid_t owner_pid;       // authoritative owner for icon lookup
+  CFTypeRef ax_window;   // cached accessibility window for edge padding
+  CGRect padding_last_attempt;
+  CFAbsoluteTime padding_last_attempt_at;
+  bool padding_attempt_valid;
+  bool padding_followup_pending;
+  uint64_t padding_followup_id;
+  uint64_t padding_followup_deadline;
   char app[64];          // owning app's process name, for per-app colourways
 
   float radius;

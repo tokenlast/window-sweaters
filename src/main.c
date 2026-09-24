@@ -9,6 +9,7 @@
 #include "parse.h"
 #include "misc/connection.h"
 #include "misc/ax.h"
+#include "padding.h"
 #include "misc/yabai.h"
 #include <stdio.h>
 #include <dlfcn.h>
@@ -155,6 +156,8 @@ void knit_apply(const char* arg) {
   buf[n] = '\0';
   buf[n + 1] = '\0';
   message_handler(buf, (uint32_t)(n + 2));
+  if (strncmp(arg, "width=", 6) == 0 || strcmp(arg, "knit=on") == 0)
+    windows_enforce_padding_all(&g_windows);
 }
 
 float knit_current_width(void) { return g_settings.border_width; }
@@ -165,6 +168,8 @@ void knit_apps_filter_changed(void) { windows_apply_app_filter(&g_windows); }
 // A saved per-app colour or chart changed in Preferences. Existing windows
 // need a redraw; newly opened windows read the same cached override.
 void knit_app_overrides_changed(void) { windows_update_all(&g_windows); }
+
+void knit_padding_changed(void) { windows_enforce_padding_all(&g_windows); }
 
 // Owners of every window that could wear a sweater, for the Apps menu.
 int knit_window_owners(int* pids, int capacity) {
@@ -241,6 +246,7 @@ int main(int argc, char** argv) {
   }
 
   if (!g_no_menu) knit_application_prepare();
+  padding_start(!g_no_menu);
   load_symbols();
   pid_for_task(mach_task_self(), &g_pid);
   table_init(&g_windows, 1024, hash_windows, cmp_windows);
